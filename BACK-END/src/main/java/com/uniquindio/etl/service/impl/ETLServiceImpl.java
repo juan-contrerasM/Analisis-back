@@ -4,85 +4,207 @@ import com.uniquindio.etl.etl.extractor.YahooFinanceExtractor;
 import com.uniquindio.etl.etl.loader.DatasetWriter;
 import com.uniquindio.etl.etl.transformer.DataAligner;
 import com.uniquindio.etl.etl.transformer.DataCleaner;
+import com.uniquindio.etl.model.EtlEstado;
 import com.uniquindio.etl.model.StockData;
 import com.uniquindio.etl.service.ETLService;
 import com.uniquindio.etl.service.SimilarityService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.*;
 
 @Service
 public class ETLServiceImpl implements ETLService {
 
+    private static final List<String> PORTFOLIO_SYMBOLS = List.of(
+            "AAPL", "MSFT", "GOOG", "AMZN", "TSLA",
+            "META", "NVDA", "JPM", "WMT", "DIS",
+            "NFLX", "KO", "PEP", "INTC", "BAC",
+            "CSCO", "ORCL", "IBM", "AMD", "ADBE"
+    );
+
     @Autowired
     private SimilarityService similarityService;
+
     private List<Map<String, Object>> retornosGlobal;
     private Map<String, Object> resultadoReq3;
+    private List<Map<String, Object>> datasetGlobal;
+
+    private volatile boolean etlEjecutado;
+    private volatile Instant ultimaActualizacion;
+    private volatile long dataVersion;
+    private volatile EtlEstado estado = EtlEstado.IDLE;
+    private volatile String mensajeError;
 
     @Override
-    public void runETL() {
+    public synchronized void runETL() {
+        estado = EtlEstado.EJECUTANDO;
+        mensajeError = null;
 
-        YahooFinanceExtractor extractor = new YahooFinanceExtractor();
-        DataCleaner cleaner = new DataCleaner();
-        DataAligner aligner = new DataAligner();
-        DatasetWriter writer = new DatasetWriter();
+        try {
+            YahooFinanceExtractor extractor = new YahooFinanceExtractor();
+            DataCleaner cleaner = new DataCleaner();
+            DataAligner aligner = new DataAligner();
+            DatasetWriter writer = new DatasetWriter();
 
-        List<String> symbols = List.of(
-                "AAPL", "MSFT", "GOOG", "AMZN", "TSLA",
-                "META", "NVDA", "JPM", "WMT", "DIS",
-                "NFLX", "KO", "PEP", "INTC", "BAC",
-                "CSCO", "ORCL", "IBM", "AMD", "ADBE"
-        );
+            Map<String, List<StockData>> allData = new HashMap<>();
 
-        Map<String, List<StockData>> allData = new HashMap<>();
+            for (String symbol : PORTFOLIO_SYMBOLS) {
 
-        for (String symbol : symbols) {
+                System.out.println("Extrayendo: " + symbol);
 
-            System.out.println("Extrayendo: " + symbol);
+                List<StockData> data = extractor.extract(symbol);
 
-            List<StockData> data = extractor.extract(symbol);
+                data = cleaner.clean(data);
 
-            // LIMPIAR
-            data = cleaner.clean(data);
+                data = aligner.forwardFill(data);
 
-            // ALINEAR
-            data = aligner.forwardFill(data);
+                data = filtrarUltimos5Anios(data);
 
-            // FILTRAR últimos 5 años
-            data = filtrarUltimos5Anios(data);
+                allData.put(symbol, data);
 
-            allData.put(symbol, data);
-
-            try {
-                Thread.sleep(2000);
-            } catch (InterruptedException e) {
-                e.printStackTrace();
+                try {
+                    Thread.sleep(2000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("ETL interrumpido", e);
+                }
             }
+
+            System.out.println("ETL finalizado");
+
+            List<Map<String, Object>> dataset = unifyData(allData);
+
+            guardarDataset(dataset, PORTFOLIO_SYMBOLS, writer);
+
+            List<Map<String, Object>> retornos = calcularRetornos(dataset);
+
+            this.datasetGlobal = dataset;
+            this.retornosGlobal = retornos;
+            this.resultadoReq3 = analizarRequerimiento3(retornos, PORTFOLIO_SYMBOLS);
+
+            this.etlEjecutado = true;
+            this.ultimaActualizacion = Instant.now();
+            this.dataVersion++;
+            this.estado = EtlEstado.LISTO;
+
+            System.out.println("ETL listo");
+        } catch (Exception e) {
+            this.estado = EtlEstado.ERROR;
+            this.mensajeError = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            if (e instanceof RuntimeException re) {
+                throw re;
+            }
+            throw new RuntimeException(e);
         }
-
-        System.out.println("ETL finalizado");
-
-        // UNIFICAR
-        List<Map<String, Object>> dataset = unifyData(allData);
-
-        // GUARDAR DATASET
-        guardarDataset(dataset, symbols, writer);
-
-        // RETORNOS
-        List<Map<String, Object>> retornos = calcularRetornos(dataset);
-
-        // IMPORTANTE
-        this.retornosGlobal = retornos;
-
-        // ANALIZAR
-        this.resultadoReq3 = analizarRequerimiento3(retornos, symbols);
-
-        System.out.println("ETL listo");
     }
 
-    // FILTRAR 5 AÑOS
+    @Override
+    public Map<String, Object> getEtlStatus() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("etlEjecutado", etlEjecutado);
+        m.put("ultimaActualizacion", ultimaActualizacion != null ? ultimaActualizacion.toString() : null);
+        m.put("estado", estado.name());
+        m.put("dataVersion", dataVersion);
+        if (mensajeError != null) {
+            m.put("mensajeError", mensajeError);
+        }
+        return m;
+    }
+
+    @Override
+    public List<String> getSymbols() {
+        return PORTFOLIO_SYMBOLS;
+    }
+
+    @Override
+    public List<Map<String, Object>> getDatasetRows() {
+        if (datasetGlobal == null) {
+            return Collections.emptyList();
+        }
+        List<Map<String, Object>> out = new ArrayList<>(datasetGlobal.size());
+        for (Map<String, Object> row : datasetGlobal) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> e : row.entrySet()) {
+                if ("date".equals(e.getKey()) && e.getValue() instanceof LocalDate ld) {
+                    copy.put("date", ld.toString());
+                } else {
+                    copy.put(e.getKey(), e.getValue());
+                }
+            }
+            out.add(copy);
+        }
+        return out;
+    }
+
+    @Override
+    public Map<String, Object> obtenerAnalisis() {
+        return resultadoReq3;
+    }
+
+    @Override
+    public Map<String, Object> calcularSimilitud(String asset1, String asset2) {
+        requireData();
+        List<Double> serie1 = new ArrayList<>();
+        List<Double> serie2 = new ArrayList<>();
+
+        for (Map<String, Object> fila : retornosGlobal) {
+            serie1.add((Double) fila.get(asset1));
+            serie2.add((Double) fila.get(asset2));
+        }
+
+        Map<String, Object> resultado = new HashMap<>();
+
+        double e = similarityService.euclidean(serie1, serie2);
+        double p = similarityService.pearson(serie1, serie2);
+        double c = similarityService.cosine(serie1, serie2);
+        double d = similarityService.dtw(serie1, serie2);
+
+        resultado.put("euclidiana", e);
+        resultado.put("pearson", p);
+        resultado.put("coseno", c);
+        resultado.put("dtw", d);
+
+        resultado.put("interpretacion", interpretar(p));
+
+        return resultado;
+    }
+
+    @Override
+    public Map<String, List<Double>> obtenerSeries(String asset1, String asset2) {
+        requireData();
+        List<Double> serie1 = new ArrayList<>();
+        List<Double> serie2 = new ArrayList<>();
+
+        for (Map<String, Object> fila : retornosGlobal) {
+            serie1.add((Double) fila.get(asset1));
+            serie2.add((Double) fila.get(asset2));
+        }
+
+        Map<String, List<Double>> resultado = new HashMap<>();
+        resultado.put(asset1, serie1);
+        resultado.put(asset2, serie2);
+
+        return resultado;
+    }
+
+    @Override
+    public boolean isEtlReady() {
+        return etlEjecutado
+                && retornosGlobal != null
+                && !retornosGlobal.isEmpty()
+                && datasetGlobal != null
+                && resultadoReq3 != null;
+    }
+
+    private void requireData() {
+        if (!isEtlReady()) {
+            throw new IllegalStateException("ETL no ejecutado o datos no disponibles");
+        }
+    }
+
     private List<StockData> filtrarUltimos5Anios(List<StockData> data) {
 
         LocalDate limite = LocalDate.now().minusYears(5);
@@ -98,7 +220,6 @@ public class ETLServiceImpl implements ETLService {
         return filtrado;
     }
 
-    // UNIFICACIÓN CORRECTA
     private List<Map<String, Object>> unifyData(Map<String, List<StockData>> allData) {
 
         Map<String, Map<LocalDate, Double>> dataMap = new HashMap<>();
@@ -142,7 +263,6 @@ public class ETLServiceImpl implements ETLService {
         return dataset;
     }
 
-    // FORWARD FILL GLOBAL
     private Double obtenerUltimoValor(Map<LocalDate, Double> serie, LocalDate fecha) {
 
         LocalDate temp = fecha.minusDays(1);
@@ -159,7 +279,6 @@ public class ETLServiceImpl implements ETLService {
         return 0.0;
     }
 
-    // GUARDAR DATASET
     private void guardarDataset(List<Map<String, Object>> dataset,
                                 List<String> symbols,
                                 DatasetWriter writer) {
@@ -184,7 +303,6 @@ public class ETLServiceImpl implements ETLService {
         writer.write(flatData);
     }
 
-    // RETORNOS
     private List<Map<String, Object>> calcularRetornos(List<Map<String, Object>> dataset) {
 
         List<Map<String, Object>> retornos = new ArrayList<>();
@@ -215,35 +333,6 @@ public class ETLServiceImpl implements ETLService {
         return retornos;
     }
 
-    // SIMILITUD
-    public Map<String, Object> calcularSimilitud(String asset1, String asset2) {
-
-        List<Double> serie1 = new ArrayList<>();
-        List<Double> serie2 = new ArrayList<>();
-
-        for (Map<String, Object> fila : retornosGlobal) {
-            serie1.add((Double) fila.get(asset1));
-            serie2.add((Double) fila.get(asset2));
-        }
-
-        Map<String, Object> resultado = new HashMap<>();
-
-        double e = similarityService.euclidean(serie1, serie2);
-        double p = similarityService.pearson(serie1, serie2);
-        double c = similarityService.cosine(serie1, serie2);
-        double d = similarityService.dtw(serie1, serie2);
-
-        resultado.put("euclidiana", e);
-        resultado.put("pearson", p);
-        resultado.put("coseno", c);
-        resultado.put("dtw", d);
-
-        // INTERPRETACIÓN
-        resultado.put("interpretacion", interpretar(p));
-
-        return resultado;
-    }
-
     private String interpretar(double pearson) {
 
         if (pearson > 0.8) return "Muy altamente correlacionados";
@@ -255,24 +344,7 @@ public class ETLServiceImpl implements ETLService {
         return "Fuertemente inversos";
     }
 
-    public Map<String, List<Double>> obtenerSeries(String asset1, String asset2) {
-
-        List<Double> serie1 = new ArrayList<>();
-        List<Double> serie2 = new ArrayList<>();
-
-        for (Map<String, Object> fila : retornosGlobal) {
-            serie1.add((Double) fila.get(asset1));
-            serie2.add((Double) fila.get(asset2));
-        }
-
-        Map<String, List<Double>> resultado = new HashMap<>();
-        resultado.put(asset1, serie1);
-        resultado.put(asset2, serie2);
-
-        return resultado;
-    }
-
-    public Map<String, Object> analizarRequerimiento3(
+    private Map<String, Object> analizarRequerimiento3(
             List<Map<String, Object>> retornos,
             List<String> symbols) {
 
@@ -340,19 +412,17 @@ public class ETLServiceImpl implements ETLService {
         return patrones;
     }
 
-    public Map<String, Object> obtenerAnalisis() {
-        return resultadoReq3;
-    }
-
     private String clasificarRiesgo(double vol) {
 
         if (vol < 0.15) return "CONSERVADOR";
         if (vol < 0.30) return "MODERADO";
         return "AGRESIVO";
     }
+
     private double volatilidad(List<Double> retornos) {
         return desviacion(retornos) * Math.sqrt(252);
     }
+
     private double desviacion(List<Double> retornos) {
 
         double media = retornos.stream()
@@ -368,5 +438,4 @@ public class ETLServiceImpl implements ETLService {
 
         return Math.sqrt(suma / retornos.size());
     }
-
 }

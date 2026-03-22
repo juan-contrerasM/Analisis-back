@@ -1,9 +1,12 @@
 package com.uniquindio.etl.controller;
 
-import com.uniquindio.etl.service.impl.ETLServiceImpl;
+import com.uniquindio.etl.service.ETLService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -12,34 +15,72 @@ import java.util.Map;
 public class ETLController {
 
     @Autowired
-    private ETLServiceImpl etlService;
+    private ETLService etlService;
 
-    // REQUERIMIENTO 1
+    private static Map<String, Object> notReadyBody() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("error", "ETL_NO_LISTO");
+        body.put("message", "Ejecute el ETL antes de consultar estos datos.");
+        return body;
+    }
+
+    @GetMapping("/status")
+    public Map<String, Object> status() {
+        return etlService.getEtlStatus();
+    }
+
     @GetMapping("/run")
     public String runETL() {
         etlService.runETL();
         return "ETL ejecutado correctamente";
     }
 
+    @GetMapping("/symbols")
+    public List<String> symbols() {
+        return etlService.getSymbols();
+    }
+
+    @GetMapping("/dataset")
+    public ResponseEntity<?> dataset() {
+        if (!etlService.isEtlReady()) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(notReadyBody());
+        }
+        return ResponseEntity.ok(etlService.getDatasetRows());
+    }
+
     @GetMapping("/similarity")
-    public Map<String, Object> similitud(
+    public ResponseEntity<?> similitud(
             @RequestParam String asset1,
             @RequestParam String asset2) {
-
-        return etlService.calcularSimilitud(asset1, asset2);
+        if (!etlService.isEtlReady()) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(notReadyBody());
+        }
+        try {
+            return ResponseEntity.ok(etlService.calcularSimilitud(asset1, asset2));
+        } catch (IllegalStateException ex) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(notReadyBody());
+        }
     }
 
     @GetMapping("/series")
-    public Map<String, List<Double>> getSeries(
+    public ResponseEntity<?> getSeries(
             @RequestParam String asset1,
             @RequestParam String asset2) {
-
-        return etlService.obtenerSeries(asset1, asset2);
+        if (!etlService.isEtlReady()) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(notReadyBody());
+        }
+        try {
+            return ResponseEntity.ok(etlService.obtenerSeries(asset1, asset2));
+        } catch (IllegalStateException ex) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(notReadyBody());
+        }
     }
 
-    // REQUERIMIENTO 3
     @GetMapping("/analysis")
-    public Map<String, Object> analizar() {
-        return etlService.obtenerAnalisis();
+    public ResponseEntity<?> analizar() {
+        if (!etlService.isEtlReady()) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(notReadyBody());
+        }
+        return ResponseEntity.ok(etlService.obtenerAnalisis());
     }
 }

@@ -1,0 +1,63 @@
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
+import { Injectable, inject } from '@angular/core';
+import { Observable, catchError, of, throwError } from 'rxjs';
+import { apiBaseUrl } from '../config/app-config';
+import {
+  AnalysisResponse,
+  DatasetRow,
+  EtlStatusResponse,
+  SeriesResponse,
+  SimilarityResult,
+} from '../../shared/models/etl.models';
+
+@Injectable({ providedIn: 'root' })
+export class EtlApiService {
+  private readonly http = inject(HttpClient);
+  private readonly base = apiBaseUrl() ? `${apiBaseUrl()}/etl` : '/etl';
+
+  getStatus(): Observable<EtlStatusResponse> {
+    return this.http.get<EtlStatusResponse>(`${this.base}/status`);
+  }
+
+  runEtl(): Observable<string> {
+    return this.http.get(`${this.base}/run`, { responseType: 'text' });
+  }
+
+  getSymbols(): Observable<string[]> {
+    return this.http.get<string[]>(`${this.base}/symbols`);
+  }
+
+  getDataset(): Observable<DatasetRow[]> {
+    return this.http.get<DatasetRow[]>(`${this.base}/dataset`).pipe(
+      catchError((e: HttpErrorResponse) => {
+        if (e.status === 503) {
+          return of([]);
+        }
+        return throwError(() => e);
+      }),
+    );
+  }
+
+  getAnalysis(): Observable<AnalysisResponse | null> {
+    return this.http.get<AnalysisResponse>(`${this.base}/analysis`).pipe(
+      catchError((e: HttpErrorResponse) => {
+        if (e.status === 503) {
+          return of(null);
+        }
+        return throwError(() => e);
+      }),
+    );
+  }
+
+  getSimilarity(asset1: string, asset2: string): Observable<SimilarityResult> {
+    return this.http.get<SimilarityResult>(`${this.base}/similarity`, {
+      params: { asset1, asset2 },
+    });
+  }
+
+  getSeries(asset1: string, asset2: string): Observable<SeriesResponse> {
+    return this.http.get<SeriesResponse>(`${this.base}/series`, {
+      params: { asset1, asset2 },
+    });
+  }
+}
