@@ -1,7 +1,9 @@
-import { Component, computed, inject } from '@angular/core';
+import { Component, computed, inject, signal } from '@angular/core';
 import { AppStatusService } from '../../core/services/app-status.service';
 import { DataColumn, DataTableComponent } from '../../shared/ui/data-table.component';
 import { PageSkeletonComponent } from '../../shared/ui/page-skeleton.component';
+import { EtlApiService } from '../../core/services/etl-api.service';
+import { AssetVolumeDay } from '../../shared/models/etl.models';
 
 @Component({
   selector: 'app-activos-page',
@@ -11,6 +13,11 @@ import { PageSkeletonComponent } from '../../shared/ui/page-skeleton.component';
 })
 export class ActivosPageComponent {
   protected readonly status = inject(AppStatusService);
+  private readonly etl = inject(EtlApiService);
+
+  protected readonly topVolumeDays = signal<AssetVolumeDay[]>([]);
+  protected readonly loadingTopVolume = signal(false);
+  protected readonly topVolumeError = signal<string | null>(null);
 
   protected readonly columns = computed<DataColumn[]>(() => {
     const rows = this.status.dataset();
@@ -24,4 +31,9 @@ export class ActivosPageComponent {
   });
 
   protected readonly rows = computed(() => this.status.dataset() as Record<string, unknown>[]);
+
+  constructor() {
+    
+  }
+
 }

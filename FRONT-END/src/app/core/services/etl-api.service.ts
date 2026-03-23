@@ -4,10 +4,12 @@ import { Observable, catchError, of, throwError } from 'rxjs';
 import { apiBaseUrl } from '../config/app-config';
 import {
   AnalysisResponse,
+  AssetVolumeDay,
   DatasetRow,
   EtlStatusResponse,
   SeriesResponse,
   SimilarityResult,
+  SortingResultData,
 } from '../../shared/models/etl.models';
 
 @Injectable({ providedIn: 'root' })
@@ -59,5 +61,16 @@ export class EtlApiService {
     return this.http.get<SeriesResponse>(`${this.base}/series`, {
       params: { asset1, asset2 },
     });
+  }
+
+  getTableSort(size = 8192): Observable<SortingResultData[]> {
+    return this.http.get<SortingResultData[]>(`${this.base}/getTableSort`, {
+      params: { size: String(size) },
+    });
+  }
+
+  /** Top 15 días con mayor volumen (backend ya limita a 15 y retorna en orden descendente). */
+  getVolumenAsc(): Observable<AssetVolumeDay[]> {
+    return this.http.get<AssetVolumeDay[]>(`${this.base}/getVolumenAsc`);
   }
 }

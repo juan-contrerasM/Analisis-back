@@ -43,3 +43,22 @@ export interface EtlNotReadyBody {
 }
 
 export type SyncState = 'idle' | 'polling' | 'refreshing' | 'error';
+
+/** Resultado de benchmark de ordenamiento (`GET /etl/getTableSort`). */
+export interface SortingResultData {
+  algorithm: string;
+  size: number;
+  time: number;
+}
+
+/** Día con datos OHLCV para ranking de volumen negociado. */
+export interface AssetVolumeDay {
+  id: number | null;
+  symbol: string;
+  date: string;
+  open: number;
+  close: number;
+  high: number;
+  low: number;
+  volume: number;
+}

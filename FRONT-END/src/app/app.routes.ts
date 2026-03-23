@@ -27,6 +27,11 @@ export const routes: Routes = [
         loadChildren: () =>
           import('./features/analisis/analisis.routes').then((m) => m.ANALISIS_ROUTES),
       },
+      {
+        path: 'ordenamiento',
+        loadChildren: () =>
+          import('./features/ordenamiento/ordenamiento.routes').then((m) => m.ORDENAMIENTO_ROUTES),
+      },
     ],
   },
 ];

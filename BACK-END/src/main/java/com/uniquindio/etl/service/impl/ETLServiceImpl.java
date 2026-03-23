@@ -8,25 +8,35 @@ import com.uniquindio.etl.model.EtlEstado;
 import com.uniquindio.etl.model.StockData;
 import com.uniquindio.etl.service.ETLService;
 import com.uniquindio.etl.service.SimilarityService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.*;
 
 @Service
+@Slf4j
+@RequiredArgsConstructor
 public class ETLServiceImpl implements ETLService {
 
-    private static final List<String> PORTFOLIO_SYMBOLS = List.of(
-            "AAPL", "MSFT", "GOOG", "AMZN", "TSLA",
-            "META", "NVDA", "JPM", "WMT", "DIS",
-            "NFLX", "KO", "PEP", "INTC", "BAC",
-            "CSCO", "ORCL", "IBM", "AMD", "ADBE"
-    );
+    @Value("${app.csv.path}")
+    private String ruta;
+    private final DatasetWriter datasetWriter;
 
-    @Autowired
-    private SimilarityService similarityService;
+    private static final List<String> PORTFOLIO_SYMBOLS = List.of(
+            "AAPL"
+    );
+    
+    private final SimilarityService similarityService;
 
     private List<Map<String, Object>> retornosGlobal;
     private Map<String, Object> resultadoReq3;
@@ -47,13 +57,13 @@ public class ETLServiceImpl implements ETLService {
             ExtractorInfo extractor = new ExtractorInfo();
             DataCleaner cleaner = new DataCleaner();
             DataAligner aligner = new DataAligner();
-            DatasetWriter writer = new DatasetWriter();
+
 
             Map<String, List<StockData>> allData = new HashMap<>();
 
             for (String symbol : PORTFOLIO_SYMBOLS) {
 
-                System.out.println("Extrayendo: " + symbol);
+                log.info("Extrayendo: " + symbol);
 
                 List<StockData> data = extractor.extract(symbol);
 
@@ -62,6 +72,7 @@ public class ETLServiceImpl implements ETLService {
 
                 // ALINEAR
                 data = aligner.forwardFill(data);
+
 
                 // FILTRAR últimos 5 años
                 data = filtrarUltimos5Anios(data);
@@ -76,16 +87,13 @@ public class ETLServiceImpl implements ETLService {
                 }
             }
 
-            System.out.println("ETL finalizado");
-
-            System.out.println("ETL listo 🚀");
-
+            log.info("ETL listo");
 
             // UNIFICAR
             List<Map<String, Object>> dataset = unifyData(allData);
 
             // GUARDAR DATASET
-            guardarDataset(dataset, PORTFOLIO_SYMBOLS, writer);
+            guardarDataset(dataset, PORTFOLIO_SYMBOLS, datasetWriter);
 
             // RETORNOS
             List<Map<String, Object>> retornos = calcularRetornos(dataset);
@@ -105,7 +113,7 @@ public class ETLServiceImpl implements ETLService {
             this.dataVersion++;
             this.estado = EtlEstado.LISTO;
 
-            System.out.println("ETL listo");
+            log.info("ETL Finalizado");
         } catch (Exception e) {
             this.estado = EtlEstado.ERROR;
             this.mensajeError = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
@@ -161,6 +169,49 @@ public class ETLServiceImpl implements ETLService {
                 && !retornosGlobal.isEmpty()
                 && datasetGlobal != null
                 && resultadoReq3 != null;
+    }
+
+    @Override
+    public List<StockData> retrieveVolumeAsc() {
+        log.info("TOP 15 POR VOLUMEN:");
+
+        List<StockData> data = new ArrayList<>();
+
+        try (BufferedReader br = new BufferedReader(new FileReader(ruta))) {
+
+            String linea;
+            boolean primeraLinea = true;
+
+            while ((linea = br.readLine()) != null) {
+
+                if (primeraLinea) {
+                    primeraLinea = false;
+                    continue;
+                }
+
+                String[] columnas = linea.split(",");
+
+                StockData stock = new StockData();
+
+                stock.setDate(LocalDate.parse(columnas[0]));
+                stock.setSymbol(columnas[1]);
+                stock.setOpen(Double.parseDouble(columnas[2]));
+                stock.setClose(Double.parseDouble(columnas[3]));
+                stock.setHigh(Double.parseDouble(columnas[4]));
+                stock.setLow(Double.parseDouble(columnas[5]));
+                stock.setVolume(Long.parseLong(columnas[6]));
+
+                data.add(stock);
+            }
+
+        } catch (Exception e) {
+            log.error("Error leyendo CSV: {}", e.getMessage());
+        }
+
+        return data.stream()
+                .sorted((a, b) -> Long.compare(b.getVolume(), a.getVolume()))
+                .limit(15)
+                .toList();
     }
 
     private void requireData() {
@@ -300,16 +351,14 @@ public class ETLServiceImpl implements ETLService {
 
         writer.write(flatData);
 
-        // TOP 15
-        List<StockData> top15 = flatData.stream()
-                .sorted((a, b) -> Long.compare(b.getVolume(), a.getVolume()))
-                .limit(15)
-                .toList();
-
-        System.out.println("TOP 15 POR VOLUMEN:");
-        top15.forEach(d ->
-                System.out.println(d.getDate() + " " + d.getSymbol() + " " + d.getVolume())
-        );
+//        // TOP 15
+//        List<StockData> top15 = flatData.stream()
+//                .sorted((a, b) -> Long.compare(b.getVolume(), a.getVolume()))
+//                .limit(15)
+//                .toList();
+//
+//        top15.forEach(d -> log.info(d.getDate() + " " + d.getSymbol() + " " + d.getVolume())
+//        );
     }
 
     // RETORNOS

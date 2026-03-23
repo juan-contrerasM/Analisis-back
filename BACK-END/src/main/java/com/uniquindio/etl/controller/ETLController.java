@@ -61,6 +61,11 @@ public class ETLController {
         return ResponseEntity.ok(result);
     }
 
+    @GetMapping("/getVolumenAsc")
+    public ResponseEntity<?> getVolumenAsc() {
+        return ResponseEntity.ok(etlService.retrieveVolumeAsc());
+    }
+
     @GetMapping("/similarity")
     public ResponseEntity<?> similitud(
             @RequestParam String asset1,
