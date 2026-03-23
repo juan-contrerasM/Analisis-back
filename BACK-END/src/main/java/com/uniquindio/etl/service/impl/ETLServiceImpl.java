@@ -1,6 +1,6 @@
 package com.uniquindio.etl.service.impl;
 
-import com.uniquindio.etl.etl.extractor.YahooFinanceExtractor;
+import com.uniquindio.etl.etl.extractor.ExtractorInfo;
 import com.uniquindio.etl.etl.loader.DatasetWriter;
 import com.uniquindio.etl.etl.transformer.DataAligner;
 import com.uniquindio.etl.etl.transformer.DataCleaner;
@@ -44,7 +44,7 @@ public class ETLServiceImpl implements ETLService {
         mensajeError = null;
 
         try {
-            YahooFinanceExtractor extractor = new YahooFinanceExtractor();
+            ExtractorInfo extractor = new ExtractorInfo();
             DataCleaner cleaner = new DataCleaner();
             DataAligner aligner = new DataAligner();
             DatasetWriter writer = new DatasetWriter();
@@ -57,10 +57,13 @@ public class ETLServiceImpl implements ETLService {
 
                 List<StockData> data = extractor.extract(symbol);
 
+                // LIMPIAR
                 data = cleaner.clean(data);
 
+                // ALINEAR
                 data = aligner.forwardFill(data);
 
+                // FILTRAR últimos 5 años
                 data = filtrarUltimos5Anios(data);
 
                 allData.put(symbol, data);
@@ -75,11 +78,23 @@ public class ETLServiceImpl implements ETLService {
 
             System.out.println("ETL finalizado");
 
+            System.out.println("ETL listo 🚀");
+
+
+            // UNIFICAR
             List<Map<String, Object>> dataset = unifyData(allData);
 
+            // GUARDAR DATASET
             guardarDataset(dataset, PORTFOLIO_SYMBOLS, writer);
 
+            // RETORNOS
             List<Map<String, Object>> retornos = calcularRetornos(dataset);
+
+            // IMPORTANTE
+            this.retornosGlobal = retornos;
+
+            // ANALIZAR
+            this.resultadoReq3 = analizarRequerimiento3(retornos, PORTFOLIO_SYMBOLS);
 
             this.datasetGlobal = dataset;
             this.retornosGlobal = retornos;
@@ -140,10 +155,203 @@ public class ETLServiceImpl implements ETLService {
     }
 
     @Override
-    public Map<String, Object> obtenerAnalisis() {
-        return resultadoReq3;
+    public boolean isEtlReady() {
+        return etlEjecutado
+                && retornosGlobal != null
+                && !retornosGlobal.isEmpty()
+                && datasetGlobal != null
+                && resultadoReq3 != null;
     }
 
+    private void requireData() {
+        if (!isEtlReady()) {
+            throw new IllegalStateException("ETL no ejecutado o datos no disponibles");
+        }
+    }
+
+    // FILTRAR 5 AÑOS
+    private List<StockData> filtrarUltimos5Anios(List<StockData> data) {
+
+        LocalDate limite = LocalDate.now().minusYears(5);
+
+        List<StockData> filtrado = new ArrayList<>();
+
+        for (StockData d : data) {
+            if (!d.getDate().isBefore(limite)) {
+                filtrado.add(d);
+            }
+        }
+
+        return filtrado;
+    }
+
+    // UNIFICACIÓN CORRECTA
+    private List<Map<String, Object>> unifyData(Map<String, List<StockData>> allData) {
+
+        Map<String, Map<LocalDate, StockData>> dataMap = new HashMap<>();
+        Set<LocalDate> todasFechas = new TreeSet<>();
+
+        for (String symbol : allData.keySet()) {
+
+            Map<LocalDate, StockData> series = new HashMap<>();
+
+            for (StockData d : allData.get(symbol)) {
+                series.put(d.getDate(), d);
+                todasFechas.add(d.getDate());
+            }
+
+            dataMap.put(symbol, series);
+        }
+
+        List<Map<String, Object>> dataset = new ArrayList<>();
+
+        for (LocalDate fecha : todasFechas) {
+
+            Map<String, Object> fila = new HashMap<>();
+            fila.put("date", fecha);
+
+            for (String symbol : dataMap.keySet()) {
+
+                StockData data = dataMap.get(symbol).get(fecha);
+
+                if (data == null) {
+                    data = obtenerUltimoValor(dataMap.get(symbol), fecha);
+                }
+
+                if (data != null) {
+                    fila.put(symbol + "_open", data.getOpen());
+                    fila.put(symbol + "_close", data.getClose());
+                    fila.put(symbol + "_high", data.getHigh());
+                    fila.put(symbol + "_low", data.getLow());
+                    fila.put(symbol + "_volume", data.getVolume());
+
+                } else {
+                    fila.put(symbol + "_open", null);
+                    fila.put(symbol + "_close", null);
+                    fila.put(symbol + "_high", null);
+                    fila.put(symbol + "_low", null);
+                    fila.put(symbol + "_volume", null);
+                }
+            }
+
+            dataset.add(fila);
+        }
+
+        return dataset;
+    }
+
+    private StockData obtenerUltimoValor(Map<LocalDate, StockData> serie, LocalDate fecha) {
+
+        LocalDate temp = fecha.minusDays(1);
+
+        while (temp != null) {
+
+            if (serie.containsKey(temp)) {
+                return serie.get(temp);
+            }
+
+            temp = temp.minusDays(1);
+        }
+
+        return null;
+    }
+
+
+    // GUARDAR DATASET
+    private void guardarDataset(List<Map<String, Object>> dataset,
+                                List<String> symbols,
+                                DatasetWriter writer) {
+
+        List<StockData> flatData = new ArrayList<>();
+
+        for (Map<String, Object> fila : dataset) {
+
+            LocalDate fecha = (LocalDate) fila.get("date");
+
+            for (String symbol : symbols) {
+
+                Object openObj = fila.get(symbol + "_open");
+                Object highObj = fila.get(symbol + "_high");
+                Object lowObj = fila.get(symbol + "_low");
+                Object closeObj = fila.get(symbol + "_close");
+                Object volumeObj = fila.get(symbol + "_volume");
+
+                // VALIDAR
+                if (openObj == null || highObj == null || lowObj == null || closeObj == null) continue;
+
+                StockData d = new StockData();
+                d.setDate(fecha);
+                d.setSymbol(symbol);
+
+                d.setOpen(((Number) openObj).doubleValue());
+                d.setHigh(((Number) highObj).doubleValue());
+                d.setLow(((Number) lowObj).doubleValue());
+                d.setClose(((Number) closeObj).doubleValue());
+                d.setVolume(((Number) volumeObj).longValue());
+
+                flatData.add(d);
+            }
+        }
+
+        flatData.sort(
+                Comparator.comparing(StockData::getDate)
+                        .thenComparing(StockData::getClose)
+        );
+
+        writer.write(flatData);
+
+        // TOP 15
+        List<StockData> top15 = flatData.stream()
+                .sorted((a, b) -> Long.compare(b.getVolume(), a.getVolume()))
+                .limit(15)
+                .toList();
+
+        System.out.println("TOP 15 POR VOLUMEN:");
+        top15.forEach(d ->
+                System.out.println(d.getDate() + " " + d.getSymbol() + " " + d.getVolume())
+        );
+    }
+
+    // RETORNOS
+    private List<Map<String, Object>> calcularRetornos(List<Map<String, Object>> dataset) {
+
+        List<Map<String, Object>> retornos = new ArrayList<>();
+
+        for (int i = 1; i < dataset.size(); i++) {
+
+            Map<String, Object> hoy = dataset.get(i);
+            Map<String, Object> ayer = dataset.get(i - 1);
+
+            Map<String, Object> fila = new HashMap<>();
+            fila.put("date", hoy.get("date"));
+
+            for (String key : hoy.keySet()) {
+
+                if (!key.endsWith("_close")) continue;
+
+                Object vHoy = hoy.get(key);
+                Object vAyer = ayer.get(key);
+
+                if (vHoy == null || vAyer == null) continue;
+
+                double precioHoy = ((Number) vHoy).doubleValue();
+                double precioAyer = ((Number) vAyer).doubleValue();
+
+                if (precioAyer == 0) continue;
+
+                double retorno = (precioHoy - precioAyer) / precioAyer;
+
+                String symbol = key.replace("_close", "");
+                fila.put(symbol, retorno);
+            }
+
+            retornos.add(fila);
+        }
+
+        return retornos;
+    }
+
+    // SIMILITUD
     @Override
     public Map<String, Object> calcularSimilitud(String asset1, String asset2) {
         requireData();
@@ -172,9 +380,20 @@ public class ETLServiceImpl implements ETLService {
         return resultado;
     }
 
+    private String interpretar(double pearson) {
+
+        if (pearson > 0.8) return "Muy altamente correlacionados";
+        if (pearson > 0.5) return "Moderadamente correlacionados";
+        if (pearson > 0.2) return "Débil correlación";
+        if (pearson > -0.2) return "Sin relación";
+        if (pearson > -0.5) return "Correlación negativa débil";
+
+        return "Fuertemente inversos";
+    }
+
     @Override
     public Map<String, List<Double>> obtenerSeries(String asset1, String asset2) {
-        requireData();
+
         List<Double> serie1 = new ArrayList<>();
         List<Double> serie2 = new ArrayList<>();
 
@@ -190,161 +409,7 @@ public class ETLServiceImpl implements ETLService {
         return resultado;
     }
 
-    @Override
-    public boolean isEtlReady() {
-        return etlEjecutado
-                && retornosGlobal != null
-                && !retornosGlobal.isEmpty()
-                && datasetGlobal != null
-                && resultadoReq3 != null;
-    }
-
-    private void requireData() {
-        if (!isEtlReady()) {
-            throw new IllegalStateException("ETL no ejecutado o datos no disponibles");
-        }
-    }
-
-    private List<StockData> filtrarUltimos5Anios(List<StockData> data) {
-
-        LocalDate limite = LocalDate.now().minusYears(5);
-
-        List<StockData> filtrado = new ArrayList<>();
-
-        for (StockData d : data) {
-            if (!d.getDate().isBefore(limite)) {
-                filtrado.add(d);
-            }
-        }
-
-        return filtrado;
-    }
-
-    private List<Map<String, Object>> unifyData(Map<String, List<StockData>> allData) {
-
-        Map<String, Map<LocalDate, Double>> dataMap = new HashMap<>();
-        Set<LocalDate> todasFechas = new TreeSet<>();
-
-        for (String symbol : allData.keySet()) {
-
-            Map<LocalDate, Double> series = new HashMap<>();
-
-            for (StockData d : allData.get(symbol)) {
-                series.put(d.getDate(), d.getClose());
-                todasFechas.add(d.getDate());
-            }
-
-            dataMap.put(symbol, series);
-        }
-
-        List<Map<String, Object>> dataset = new ArrayList<>();
-
-        for (LocalDate fecha : todasFechas) {
-
-            Map<String, Object> fila = new HashMap<>();
-            fila.put("date", fecha);
-
-            for (String symbol : dataMap.keySet()) {
-
-                Double valor = dataMap.get(symbol).get(fecha);
-
-                if (valor == null) {
-                    valor = obtenerUltimoValor(dataMap.get(symbol), fecha);
-                }
-
-                fila.put(symbol, valor);
-            }
-
-            dataset.add(fila);
-        }
-
-        System.out.println("Dataset unificado: " + dataset.size());
-
-        return dataset;
-    }
-
-    private Double obtenerUltimoValor(Map<LocalDate, Double> serie, LocalDate fecha) {
-
-        LocalDate temp = fecha.minusDays(1);
-
-        while (temp != null) {
-
-            if (serie.containsKey(temp)) {
-                return serie.get(temp);
-            }
-
-            temp = temp.minusDays(1);
-        }
-
-        return 0.0;
-    }
-
-    private void guardarDataset(List<Map<String, Object>> dataset,
-                                List<String> symbols,
-                                DatasetWriter writer) {
-
-        List<StockData> flatData = new ArrayList<>();
-
-        for (Map<String, Object> fila : dataset) {
-
-            LocalDate fecha = (LocalDate) fila.get("date");
-
-            for (String symbol : symbols) {
-
-                StockData d = new StockData();
-                d.setDate(fecha);
-                d.setSymbol(symbol);
-                d.setClose((Double) fila.get(symbol));
-
-                flatData.add(d);
-            }
-        }
-
-        writer.write(flatData);
-    }
-
-    private List<Map<String, Object>> calcularRetornos(List<Map<String, Object>> dataset) {
-
-        List<Map<String, Object>> retornos = new ArrayList<>();
-
-        for (int i = 1; i < dataset.size(); i++) {
-
-            Map<String, Object> hoy = dataset.get(i);
-            Map<String, Object> ayer = dataset.get(i - 1);
-
-            Map<String, Object> fila = new HashMap<>();
-            fila.put("date", hoy.get("date"));
-
-            for (String key : hoy.keySet()) {
-
-                if (key.equals("date")) continue;
-
-                double precioHoy = (double) hoy.get(key);
-                double precioAyer = (double) ayer.get(key);
-
-                double retorno = (precioHoy - precioAyer) / precioAyer;
-
-                fila.put(key, retorno);
-            }
-
-            retornos.add(fila);
-        }
-
-        return retornos;
-    }
-
-    private String interpretar(double pearson) {
-
-        if (pearson > 0.8) return "Muy altamente correlacionados";
-        if (pearson > 0.5) return "Moderadamente correlacionados";
-        if (pearson > 0.2) return "Débil correlación";
-        if (pearson > -0.2) return "Sin relación";
-        if (pearson > -0.5) return "Correlación negativa débil";
-
-        return "Fuertemente inversos";
-    }
-
-    private Map<String, Object> analizarRequerimiento3(
+    public Map<String, Object> analizarRequerimiento3(
             List<Map<String, Object>> retornos,
             List<String> symbols) {
 
@@ -410,6 +475,10 @@ public class ETLServiceImpl implements ETLService {
         patrones.put("altaVolatilidad", altaVolatilidad);
 
         return patrones;
+    }
+
+    public Map<String, Object> obtenerAnalisis() {
+        return resultadoReq3;
     }
 
     private String clasificarRiesgo(double vol) {

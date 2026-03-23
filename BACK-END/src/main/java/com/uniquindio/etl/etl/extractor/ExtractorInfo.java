@@ -9,7 +9,7 @@ import java.net.URL;
 import java.time.LocalDate;
 import java.util.*;
 
-public class YahooFinanceExtractor {
+public class ExtractorInfo {
 
     public List<StockData> extract(String symbol) {
 
@@ -17,26 +17,21 @@ public class YahooFinanceExtractor {
 
         try {
 
-            //URL
             String urlStr = "https://stooq.com/q/d/l/?s=" + mapSymbol(symbol) + "&i=d";
 
             URL url = new URL(urlStr);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 
-            //USER-AGENT
             conn.setRequestProperty(
                     "User-Agent",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
             );
 
             conn.setRequestMethod("GET");
             conn.connect();
 
-            int responseCode = conn.getResponseCode();
-
-            if (responseCode != 200) {
-                throw new RuntimeException("Error HTTP: " + responseCode);
+            if (conn.getResponseCode() != 200) {
+                throw new RuntimeException("Error HTTP: " + conn.getResponseCode());
             }
 
             BufferedReader reader = new BufferedReader(
@@ -55,24 +50,37 @@ public class YahooFinanceExtractor {
 
                 String[] p = line.split(",");
 
-                // Validación
-                if (p.length < 6 || p[1].equals("null")) continue;
+                if (p.length < 6) continue;
 
-                StockData d = new StockData();
-                d.setSymbol(symbol);
-                d.setDate(LocalDate.parse(p[0]));
-                d.setOpen(Double.parseDouble(p[1]));
-                d.setHigh(Double.parseDouble(p[2]));
-                d.setLow(Double.parseDouble(p[3]));
-                d.setClose(Double.parseDouble(p[4]));
                 try {
-                    d.setVolume((long) Double.parseDouble(p[5]));
-                } catch (Exception e) {
-                    d.setVolume(0);
-                }
-                //SE UTILIZA EL TRY  YA QUE ALGUNOS TDATOS ESTAN COMO DECIMAL Y OTROS COMO ENTEROS
 
-                dataList.add(d);
+                    double open = Double.parseDouble(p[1]);
+                    double high = Double.parseDouble(p[2]);
+                    double low = Double.parseDouble(p[3]);
+                    double close = Double.parseDouble(p[4]);
+
+                    // FILTRO CLAVE
+                    if (open == 0 || high == 0 || low == 0 || close == 0) continue;
+
+                    StockData d = new StockData();
+                    d.setSymbol(symbol);
+                    d.setDate(LocalDate.parse(p[0]));
+                    d.setOpen(open);
+                    d.setHigh(high);
+                    d.setLow(low);
+                    d.setClose(close);
+
+                    try {
+                        d.setVolume(Long.parseLong(p[5]));
+                    } catch (Exception e) {
+                        d.setVolume(0);
+                    }
+
+                    dataList.add(d);
+
+                } catch (Exception e) {
+                    // ignora filas corruptas
+                }
             }
 
             reader.close();
@@ -82,18 +90,12 @@ public class YahooFinanceExtractor {
             System.out.println("Error con " + symbol + ": " + e.getMessage());
         }
 
-        //ORDENAR POR FECHA
         dataList.sort(Comparator.comparing(StockData::getDate));
 
         return dataList;
     }
 
-    //MAPEO DE SÍMBOLOS
     private String mapSymbol(String symbol) {
-
-        switch (symbol) {
-            case "EC": return "ec.us";
-            default: return symbol.toLowerCase() + ".us";
-        }
+        return symbol.toLowerCase() + ".us";
     }
 }

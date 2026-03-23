@@ -1,14 +1,10 @@
 package com.uniquindio.etl.model;
 import lombok.*;
-
-
 import java.time.LocalDate;
-
 
 @Data
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class StockData {
-
 
     private Long id;
     private String symbol;
@@ -18,4 +14,5 @@ public class StockData {
     private double high;
     private double low;
     private long volume;
+
 }
