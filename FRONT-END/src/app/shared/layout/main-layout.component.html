@@ -27,8 +27,13 @@
         ></span>
         <span class="status-text">{{ status.uiStatusLabel() }}</span>
         <span class="sep">·</span>
-        <span class="muted">Última actualización (servidor):</span>
+        <span class="muted">Última carga exitosa (servidor):</span>
         <span class="mono">{{ status.lastUpdateDisplay() }}</span>
+        @if (status.showingPreviousDataWhileEtl()) {
+          <span class="stale-hint">(mostrando datos anteriores hasta terminar el ETL)</span>
+        }
+        <span class="sep">·</span>
+        <span class="muted">{{ status.statusPollHint() }}</span>
         <span class="sep">·</span>
         <span class="muted">{{ status.autoRefreshHint() }}</span>
       </div>

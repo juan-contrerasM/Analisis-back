@@ -118,10 +118,17 @@ select {
 }
 
 .chart-card h2 {
-  margin: 0 0 0.75rem;
+  margin: 0 0 0.35rem;
   font-size: 0.95rem;
   font-weight: 600;
   color: var(--text-secondary);
+}
+
+.chart-note {
+  margin: 0 0 0.75rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.35;
 }
 
 .chart-host {

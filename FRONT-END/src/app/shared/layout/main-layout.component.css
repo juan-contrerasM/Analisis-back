@@ -130,6 +130,13 @@
   font-size: 0.8rem;
 }
 
+.stale-hint {
+  margin-left: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--warning);
+  font-weight: 500;
+}
+
 .topbar-actions {
   display: flex;
   gap: 0.5rem;

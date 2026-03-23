@@ -51,11 +51,20 @@
       <div><span class="k">Coseno</span> {{ fmt(r.coseno) }}</div>
       <div><span class="k">DTW</span> {{ fmt(r.dtw) }}</div>
     </div>
-    @if (metricBar(); as chart) {
+    @if (similarityBarChart(); as bc) {
       <div class="chart-card">
-        <h2>Comparación visual (normalizada)</h2>
+        <h2>Comparación visual</h2>
+        <p class="chart-note">
+          Las barras escalan las cuatro métricas al mismo rango (la mayor llega al 100&nbsp;%). Los valores exactos están arriba y en el tooltip al pasar el cursor.
+        </p>
         <div class="chart-host">
-          <canvas baseChart [data]="chart.data" [options]="chart.options" [type]="chart.type"></canvas>
+          <canvas
+            baseChart
+            [type]="'bar'"
+            [labels]="bc.labels"
+            [datasets]="bc.datasets"
+            [options]="bc.options"
+          ></canvas>
         </div>
       </div>
     }

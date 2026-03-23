@@ -33,7 +33,10 @@ public class ETLServiceImpl implements ETLService {
     private final DatasetWriter datasetWriter;
 
     private static final List<String> PORTFOLIO_SYMBOLS = List.of(
-            "AAPL"
+            "AAPL", "MSFT", "GOOG", "AMZN", "TSLA",
+            "META", "NVDA", "JPM", "WMT", "DIS",
+            "NFLX", "KO", "PEP", "INTC", "BAC",
+            "CSCO", "ORCL", "IBM", "AMD", "ADBE"
     );
     
     private final SimilarityService similarityService;
@@ -66,16 +69,19 @@ public class ETLServiceImpl implements ETLService {
                 log.info("Extrayendo: " + symbol);
 
                 List<StockData> data = extractor.extract(symbol);
+                log.info(String.format("Catidad registros extraidos de %s : %s ",symbol,data.size()));
 
                 // LIMPIAR
                 data = cleaner.clean(data);
+                log.info(String.format("Cantidad registros limpiados  de %s : %s ",symbol,data.size()));
 
                 // ALINEAR
                 data = aligner.forwardFill(data);
-
+                log.info(String.format("Cantidad registros despues de  forward fill  de %s : %s ",symbol,data.size()));
 
                 // FILTRAR últimos 5 años
                 data = filtrarUltimos5Anios(data);
+                log.info(String.format("Cantidad registros despues de un filtro de  5 años  de %s : %s ",symbol,data.size()));
 
                 allData.put(symbol, data);
 
@@ -537,12 +543,14 @@ public class ETLServiceImpl implements ETLService {
         return "AGRESIVO";
     }
 
+    //252 dias bursatiles, no se cuenta fines de semana, festivos, ni dias sin taiding promedio
     private double volatilidad(List<Double> retornos) {
         return desviacion(retornos) * Math.sqrt(252);
     }
 
     private double desviacion(List<Double> retornos) {
 
+        //promedio
         double media = retornos.stream()
                 .mapToDouble(Double::doubleValue)
                 .average()
@@ -550,10 +558,12 @@ public class ETLServiceImpl implements ETLService {
 
         double suma = 0;
 
+        //dispercion: que tan lejos esta del promedio
         for (double r : retornos) {
             suma += Math.pow(r - media, 2);
         }
 
+        //desviacion estandar
         return Math.sqrt(suma / retornos.size());
     }
 }

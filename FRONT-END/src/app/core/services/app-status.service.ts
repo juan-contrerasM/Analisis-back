@@ -15,7 +15,6 @@ import { GlobalErrorService } from './global-error.service';
 @Injectable({ providedIn: 'root' })
 export class AppStatusService {
   private readonly api = inject(EtlApiService);
-  private readonly destroyRef = inject(DestroyRef);
   private readonly globalError = inject(GlobalErrorService);
 
   readonly etlStatus = signal<EtlStatusResponse | null>(null);
@@ -27,42 +26,78 @@ export class AppStatusService {
   readonly analysis = signal<AnalysisResponse | null>(null);
 
   private refreshLock = false;
+  /** Marca de tiempo de la última recarga pesada exitosa (throttle). */
+  private lastHeavySuccessAt = 0;
 
-  /** Texto para la UI (p. ej. “Auto cada 1 min”). */
+  /** Copia de `ultimaActualizacion` para no perder la hora si el API devuelve null en algún borde. */
+  private readonly cachedUltimaActualizacion = signal<string | null>(null);
+
+  readonly statusPollHint = computed(() => {
+    const ms = environment.statusPollIntervalMs ?? 5_000;
+    const s = Math.round(ms / 1000);
+    return s >= 60 ? `Estado cada ${s / 60} min` : `Estado cada ${s}s`;
+  });
+
   readonly autoRefreshHint = computed(() => {
     const ms = environment.autoRefreshIntervalMs;
     const min = Math.round(ms / 60_000);
     if (min >= 1 && ms % 60_000 === 0) {
-      return min === 1 ? 'Auto cada 1 min' : `Auto cada ${min} min`;
+      return min === 1 ? 'Datos cada 1 min' : `Datos cada ${min} min`;
     }
     const s = Math.round(ms / 1000);
-    return `Auto cada ${s}s`;
+    return `Datos cada ${s}s`;
   });
 
-  readonly dataReady = computed(
-    () =>
-      this.etlStatus()?.etlEjecutado === true &&
-      this.etlStatus()?.estado === 'LISTO' &&
-      this.dataset().length > 0,
-  );
+  /**
+   * Mientras el ETL corre en el servidor, seguimos mostrando el último dataset/análisis cargado
+   * (no ocultar dashboard ni tablas).
+   */
+  readonly dataReady = computed(() => {
+    const st = this.etlStatus();
+    if (!st?.etlEjecutado || this.dataset().length === 0) {
+      return false;
+    }
+    return st.estado === 'LISTO' || st.estado === 'EJECUTANDO';
+  });
+
+  readonly showingPreviousDataWhileEtl = computed(() => {
+    const st = this.etlStatus();
+    return st?.estado === 'EJECUTANDO' && this.dataset().length > 0;
+  });
 
   readonly uiStatusLabel = computed(() => {
     const st = this.etlStatus();
     const sync = this.syncState();
-    if (sync === 'refreshing') return 'Sincronizando datos…';
-    if (st?.estado === 'EJECUTANDO') return 'ETL en ejecución…';
-    if (st?.estado === 'ERROR') return 'Error en ETL';
-    if (this.lastPollError()) return 'Error de conexión';
-    if (this.dataReady()) return 'Actualizado';
-    if (st?.etlEjecutado) return 'Listo (sin datos en caché)';
+    if (st?.estado === 'EJECUTANDO') {
+      return 'ETL en ejecución en servidor…';
+    }
+    if (sync === 'refreshing') {
+      return 'Sincronizando datos…';
+    }
+    if (st?.estado === 'ERROR') {
+      return 'Error en ETL';
+    }
+    if (this.lastPollError()) {
+      return 'Error de conexión';
+    }
+    if (this.dataReady()) {
+      return 'Actualizado';
+    }
+    if (st?.etlEjecutado) {
+      return 'Listo (sin datos en caché)';
+    }
     return 'ETL no ejecutado';
   });
 
   readonly lastUpdateDisplay = computed(() => {
-    const iso = this.etlStatus()?.ultimaActualizacion;
-    if (!iso) return '—';
+    const iso = this.etlStatus()?.ultimaActualizacion ?? this.cachedUltimaActualizacion();
+    if (!iso) {
+      return '—';
+    }
     const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
+    if (Number.isNaN(d.getTime())) {
+      return iso;
+    }
     return d.toLocaleTimeString(undefined, {
       hour: '2-digit',
       minute: '2-digit',
@@ -77,11 +112,15 @@ export class AppStatusService {
     });
   }
 
-  startPolling(): void {
-    const pollMs = environment.autoRefreshIntervalMs;
+  /**
+   * `destroyRef`: del shell (MainLayout).
+   * Poll rápido de estado; recarga pesada acotada por `autoRefreshIntervalMs`.
+   */
+  startPolling(destroyRef: DestroyRef): void {
+    const pollMs = environment.statusPollIntervalMs ?? 5_000;
     timer(0, pollMs)
       .pipe(
-        takeUntilDestroyed(this.destroyRef),
+        takeUntilDestroyed(destroyRef),
         tap(() => {
           if (this.syncState() !== 'refreshing' && !this.refreshLock) {
             this.syncState.set('polling');
@@ -103,11 +142,14 @@ export class AppStatusService {
         }
         this.lastPollError.set(null);
         this.globalError.clear();
+        if (status.ultimaActualizacion) {
+          this.cachedUltimaActualizacion.set(status.ultimaActualizacion);
+        }
         this.etlStatus.set(status);
         if (this.syncState() === 'error') {
           this.syncState.set('idle');
         }
-        this.applyStatusForAutoRefresh(status);
+        this.maybeRefreshHeavyData(status);
         if (status.estado !== 'EJECUTANDO' && this.syncState() === 'polling') {
           this.syncState.set('idle');
         }
@@ -115,10 +157,9 @@ export class AppStatusService {
   }
 
   /**
-   * En cada ciclo del timer: si el backend está LISTO, recarga siempre dataset / símbolos / análisis
-   * (sin comparar timestamps). Mientras EJECUTANDO solo se actualiza el estado vía getStatus.
+   * Solo con servidor LISTO; respeta intervalo entre cargas pesadas exitosas.
    */
-  private applyStatusForAutoRefresh(status: EtlStatusResponse): void {
+  private maybeRefreshHeavyData(status: EtlStatusResponse): void {
     if (this.refreshLock) {
       return;
     }
@@ -128,6 +169,11 @@ export class AppStatusService {
     if (!status.etlEjecutado || status.estado !== 'LISTO') {
       return;
     }
+    const now = Date.now();
+    const minEvery = environment.autoRefreshIntervalMs ?? 60_000;
+    if (this.lastHeavySuccessAt > 0 && now - this.lastHeavySuccessAt < minEvery) {
+      return;
+    }
     this.loadHeavyData().subscribe();
   }
 
@@ -135,7 +181,12 @@ export class AppStatusService {
     this.api
       .getStatus()
       .pipe(
-        tap((s) => this.etlStatus.set(s)),
+        tap((s) => {
+          if (s.ultimaActualizacion) {
+            this.cachedUltimaActualizacion.set(s.ultimaActualizacion);
+          }
+          this.etlStatus.set(s);
+        }),
         switchMap((s) => {
           if (s.etlEjecutado && s.estado === 'LISTO') {
             return this.loadHeavyData();
@@ -151,7 +202,12 @@ export class AppStatusService {
     this.globalError.clear();
     return this.api.runEtl().pipe(
       switchMap(() => this.api.getStatus()),
-      tap((s) => this.etlStatus.set(s)),
+      tap((s) => {
+        if (s.ultimaActualizacion) {
+          this.cachedUltimaActualizacion.set(s.ultimaActualizacion);
+        }
+        this.etlStatus.set(s);
+      }),
       switchMap((s) => {
         if (s.etlEjecutado && s.estado === 'LISTO') {
           return this.loadHeavyData();
@@ -181,6 +237,7 @@ export class AppStatusService {
         this.symbols.set(symbols);
         this.dataset.set(dataset);
         this.analysis.set(analysis);
+        this.lastHeavySuccessAt = Date.now();
       }),
       catchError((err: Error) => {
         this.lastPollError.set(err?.message ?? 'Error al cargar datos');

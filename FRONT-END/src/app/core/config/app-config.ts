@@ -7,3 +7,7 @@ export function apiBaseUrl(): string {
 export function autoRefreshIntervalMs(): number {
   return environment.autoRefreshIntervalMs;
 }
+
+export function statusPollIntervalMs(): number {
+  return environment.statusPollIntervalMs ?? 5_000;
+}

@@ -1,5 +1,5 @@
 import { Component, computed, effect, inject, signal } from '@angular/core';
-import { ChartConfiguration } from 'chart.js';
+import { ChartConfiguration, ChartDataset, ChartOptions } from 'chart.js';
 import { BaseChartDirective } from 'ng2-charts';
 import { AppStatusService } from '../../core/services/app-status.service';
 import { EtlApiService } from '../../core/services/etl-api.service';
@@ -24,39 +24,81 @@ export class SimilitudPageComponent {
   protected readonly seriesLoading = signal(false);
   protected readonly error = signal<string | null>(null);
 
-  protected readonly metricBar = computed<ChartConfiguration<'bar'> | null>(() => {
+  /**
+   * `labels` + `datasets` + `options` por separado (más fiable con ng2-charts que `data` anidado).
+   */
+  protected readonly similarityBarChart = computed(() => {
     const r = this.result();
     if (!r) return null;
-    const pearN = Math.min(100, Math.max(0, ((r.pearson + 1) / 2) * 100));
-    const cosN = Math.min(100, Math.max(0, r.coseno * 100));
-    const eucN = Math.min(100, r.euclidiana * 15);
-    const dtwN = Math.min(100, r.dtw / 50);
-    return {
-      type: 'bar',
-      data: {
-        labels: ['Pearson', 'Coseno x100', 'Euclid x15', 'DTW/50'],
-        datasets: [
-          {
-            label: 'Normalizado (visual)',
-            data: [pearN, cosN, eucN, dtwN],
-            backgroundColor: 'rgba(167, 139, 250, 0.45)',
-            borderColor: 'rgba(167, 139, 250, 0.95)',
-            borderWidth: 1,
-          },
+
+    const pear = Number(r.pearson);
+    const cos = Number(r.coseno);
+    const euc = Number(r.euclidiana);
+    const dtw = Number(r.dtw);
+    if (![pear, cos, euc, dtw].every((x) => Number.isFinite(x))) {
+      return null;
+    }
+
+    const pearN = Math.max(0, Math.min(100, ((pear + 1) / 2) * 100));
+    const cosN = Math.max(0, Math.min(100, cos * 100));
+    const eucN = Math.max(0, Math.min(100, euc * 15));
+    const dtwN = Math.max(0, Math.min(100, dtw * 7));
+    const pre = [pearN, cosN, eucN, dtwN];
+    const maxPre = Math.max(...pre, 1e-9);
+    const barData = pre.map((v) => Number(((v / maxPre) * 100).toFixed(6)));
+
+    const labels = ['Pearson', 'Coseno', 'Euclidiana', 'DTW'];
+    const rawVals = [pear, cos, euc, dtw];
+
+    const datasets: ChartDataset<'bar'>[] = [
+      {
+        label: 'Relativo al máximo (forma)',
+        data: barData,
+        backgroundColor: [
+          'rgba(56, 189, 248, 0.55)',
+          'rgba(52, 211, 153, 0.55)',
+          'rgba(251, 191, 36, 0.55)',
+          'rgba(192, 132, 252, 0.7)',
         ],
+        borderColor: [
+          'rgb(56, 189, 248)',
+          'rgb(52, 211, 153)',
+          'rgb(251, 191, 36)',
+          'rgb(192, 132, 252)',
+        ],
+        borderWidth: 1,
+        borderSkipped: false,
+        minBarLength: 6,
       },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { labels: { color: '#9fb0c3' } },
+    ];
+
+    const options: ChartOptions<'bar'> = {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 400 },
+      plugins: {
+        legend: { labels: { color: '#9fb0c3' } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const i = ctx.dataIndex ?? 0;
+              return `${labels[i]}: ${rawVals[i].toFixed(4)}`;
+            },
+          },
         },
-        scales: {
-          x: { ticks: { color: '#7d8ea3' }, grid: { color: 'rgba(148,163,184,0.12)' } },
-          y: { ticks: { color: '#7d8ea3' }, grid: { color: 'rgba(148,163,184,0.12)' }, max: 100 },
+      },
+      scales: {
+        x: { ticks: { color: '#7d8ea3' }, grid: { color: 'rgba(148,163,184,0.12)' } },
+        y: {
+          beginAtZero: true,
+          ticks: { color: '#7d8ea3' },
+          grid: { color: 'rgba(148,163,184,0.12)' },
+          max: 100,
         },
       },
     };
+
+    return { labels, datasets, options };
   });
 
   constructor() {

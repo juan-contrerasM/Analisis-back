@@ -18,6 +18,7 @@ public class DataAligner {
 
                 long diff = ChronoUnit.DAYS.between(prev.getDate(), curr.getDate());
 
+                // Si hay diferencia mayor a 1 día, existen fechas faltantes en la serie
                 for (int i = 1; i < diff; i++) {
 
                     StockData fill = new StockData();

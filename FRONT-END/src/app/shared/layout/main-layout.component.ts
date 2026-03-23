@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { AppStatusService } from '../../core/services/app-status.service';
 import { GlobalErrorService } from '../../core/services/global-error.service';
@@ -12,12 +12,13 @@ import { GlobalErrorService } from '../../core/services/global-error.service';
 export class MainLayoutComponent implements OnInit {
   protected readonly status = inject(AppStatusService);
   protected readonly globalError = inject(GlobalErrorService);
+  private readonly destroyRef = inject(DestroyRef);
 
   protected readonly runBusy = signal(false);
 
   ngOnInit(): void {
     this.status.loadSymbolsOnly();
-    this.status.startPolling();
+    this.status.startPolling(this.destroyRef);
   }
 
   protected runEtl(): void {
