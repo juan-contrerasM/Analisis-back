@@ -1,10 +1,15 @@
 package com.uniquindio.etl.controller;
 
+import com.uniquindio.etl.model.SortingResultData;
 import com.uniquindio.etl.service.ETLService;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.uniquindio.etl.sorting.SortingBenchmarkService;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -12,10 +17,12 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/etl")
+@RequiredArgsConstructor
 public class ETLController {
 
-    @Autowired
-    private ETLService etlService;
+    private final SortingBenchmarkService sortingBenchmarkService;
+    private final ETLService etlService;
+
 
     private static Map<String, Object> notReadyBody() {
         Map<String, Object> body = new LinkedHashMap<>();
@@ -46,6 +53,12 @@ public class ETLController {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(notReadyBody());
         }
         return ResponseEntity.ok(etlService.getDatasetRows());
+    }
+
+    @GetMapping("/getTableSort")
+    public ResponseEntity<?> getTableSort(@RequestParam(defaultValue = "8192") int size) {
+        List<SortingResultData> result = sortingBenchmarkService.ejecutarBenchmark(size);
+        return ResponseEntity.ok(result);
     }
 
     @GetMapping("/similarity")
