@@ -1,101 +1,116 @@
 package com.uniquindio.etl.etl.extractor;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.uniquindio.etl.model.StockData;
-
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.*;
 
 public class ExtractorInfo {
 
     public List<StockData> extract(String symbol) {
-
         List<StockData> dataList = new ArrayList<>();
 
-        try {
+        // Timestamps
+        long period2 = Instant.now().getEpochSecond();
+        long period1 = ZonedDateTime.now()
+                .minusYears(5)
+                .toInstant()
+                .getEpochSecond();
 
-            String urlStr = "https://stooq.com/q/d/l/?s=" + mapSymbol(symbol) + "&i=d";
+        try {
+            // Usamos el endpoint de "download" que sí devuelve un CSV
+            String urlStr = String.format(
+                    "https://query1.finance.yahoo.com/v8/finance/chart/%s?period1=%d&period2=%d&interval=1d",
+                    symbol, period1, period2
+            );
 
             URL url = new URL(urlStr);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-
-            conn.setRequestProperty(
-                    "User-Agent",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-            );
-
             conn.setRequestMethod("GET");
-            conn.connect();
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
 
-            if (conn.getResponseCode() != 200) {
-                throw new RuntimeException("Error HTTP: " + conn.getResponseCode());
+            int status = conn.getResponseCode();
+            if (status != 200) {
+                throw new RuntimeException("HTTP error: " + status);
             }
 
             BufferedReader reader = new BufferedReader(
                     new InputStreamReader(conn.getInputStream())
             );
 
+            StringBuilder response = new StringBuilder();
             String line;
-            boolean header = true;
 
             while ((line = reader.readLine()) != null) {
+                response.append(line);
 
-                if (header) {
-                    header = false;
-                    continue;
-                }
-
-                String[] p = line.split(",");
-
-                if (p.length < 6) continue;
-
-                try {
-
-                    double open = Double.parseDouble(p[1]);
-                    double high = Double.parseDouble(p[2]);
-                    double low = Double.parseDouble(p[3]);
-                    double close = Double.parseDouble(p[4]);
-
-                    // FILTRO CLAVE
-                    if (open == 0 || high == 0 || low == 0 || close == 0) continue;
-
-                    StockData d = new StockData();
-                    d.setSymbol(symbol);
-                    d.setDate(LocalDate.parse(p[0]));
-                    d.setOpen(open);
-                    d.setHigh(high);
-                    d.setLow(low);
-                    d.setClose(close);
-
-                    try {
-                        d.setVolume(Long.parseLong(p[5]));
-                    } catch (Exception e) {
-                        d.setVolume(0);
-                    }
-
-                    dataList.add(d);
-
-                } catch (Exception e) {
-                    // ignora filas corruptas
-                }
             }
 
             reader.close();
             conn.disconnect();
+            dataList = getStockData(response.toString(), symbol);
+
 
         } catch (Exception e) {
-            System.out.println("Error con " + symbol + ": " + e.getMessage());
+            System.err.println("Error crítico con " + symbol + ": " + e.getMessage());
         }
-
-        dataList.sort(Comparator.comparing(StockData::getDate));
 
         return dataList;
     }
 
     private String mapSymbol(String symbol) {
         return symbol.toLowerCase() + ".us";
+    }
+
+    private List<StockData> getStockData(String response, String symbol) throws JsonProcessingException {
+
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode root = mapper.readTree(response);
+
+        JsonNode result = root.path("chart").path("result").get(0);
+
+        JsonNode timestamps = result.path("timestamp");
+        JsonNode quote = result.path("indicators").path("quote").get(0);
+        JsonNode opens = quote.path("open");
+        JsonNode highs = quote.path("high");
+        JsonNode lows = quote.path("low");
+        JsonNode closes = quote.path("close");
+        JsonNode volumes = quote.path("volume");
+
+        List<StockData> dataList = new ArrayList<>();
+
+        for (int i = 0; i < timestamps.size(); i++) {
+
+            if (opens.get(i).isNull()) continue;
+
+            StockData d = new StockData();
+
+            d.setSymbol(symbol);
+
+            d.setDate(
+                    Instant.ofEpochSecond(timestamps.get(i).asLong())
+                            .atZone(ZoneId.systemDefault())
+                            .toLocalDate()
+            );
+
+            d.setOpen(opens.get(i).asDouble());
+            d.setHigh(highs.get(i).asDouble());
+            d.setLow(lows.get(i).asDouble());
+            d.setClose(closes.get(i).asDouble());
+            d.setVolume(volumes.get(i).asLong());
+
+            dataList.add(d);
+        }
+        return dataList;
     }
 }
