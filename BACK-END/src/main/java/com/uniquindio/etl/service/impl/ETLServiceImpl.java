@@ -494,6 +494,7 @@ public class ETLServiceImpl implements ETLService {
             activos.add(activo);
         }
 
+        /*Ordena la lista activos - usando el valor de "volatilidad" de cada elemento*/
         activos.sort(Comparator.comparing(a -> (Double) a.get("volatilidad")));
 
         resultado.put("ranking", activos);

@@ -1,4 +1,4 @@
-import { Component, computed, inject } from '@angular/core';
+import { Component, computed, effect, inject, signal } from '@angular/core';
 import { ChartConfiguration } from 'chart.js';
 import { BaseChartDirective } from 'ng2-charts';
 import { AppStatusService } from '../../core/services/app-status.service';
@@ -13,6 +13,22 @@ import { PageSkeletonComponent } from '../../shared/ui/page-skeleton.component';
 })
 export class DashboardPageComponent {
   protected readonly status = inject(AppStatusService);
+
+  /** Símbolo del gráfico de precios (últimos días de cierre). */
+  protected readonly priceChartSymbol = signal<string>('');
+
+  constructor() {
+    effect(() => {
+      const syms = this.status.symbols();
+      if (syms.length === 0) {
+        return;
+      }
+      const cur = this.priceChartSymbol();
+      if (!cur || !syms.includes(cur)) {
+        this.priceChartSymbol.set(syms.includes('AAPL') ? 'AAPL' : syms[0]);
+      }
+    });
+  }
 
   protected readonly metrics = computed(() => {
     const a = this.status.analysis();
@@ -55,7 +71,11 @@ export class DashboardPageComponent {
   protected readonly priceLine = computed<ChartConfiguration<'line'>>(() => {
     const ds = this.status.dataset();
     const syms = this.status.symbols();
-    const sym = syms.includes('AAPL') ? 'AAPL' : syms[0] ?? 'AAPL';
+    const picked = this.priceChartSymbol();
+    const sym =
+      picked && syms.includes(picked) ? picked : syms.includes('AAPL') ? 'AAPL' : syms[0] ?? 'AAPL';
+    // API: columnas OHLC por símbolo (`AAPL_close`, no `AAPL`) — ver ETLServiceImpl.unifyData.
+    const closeKey = `${sym}_close`;
     const slice = ds.slice(-90);
     return {
       type: 'line',
@@ -64,7 +84,14 @@ export class DashboardPageComponent {
         datasets: [
           {
             label: `Cierre ${sym}`,
-            data: slice.map((row) => Number(row[sym])),
+            data: slice.map((row) => {
+              const v = row[closeKey];
+              if (v === null || v === undefined || v === '') {
+                return NaN;
+              }
+              const n = typeof v === 'number' ? v : Number(v);
+              return Number.isFinite(n) ? n : NaN;
+            }),
             borderColor: 'rgba(52, 211, 153, 0.95)',
             backgroundColor: 'rgba(52, 211, 153, 0.12)',
             fill: true,

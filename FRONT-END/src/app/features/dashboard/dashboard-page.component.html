@@ -26,7 +26,20 @@
       </div>
     </div>
     <div class="chart-card">
-      <h2>Serie de precios (referencia)</h2>
+      <div class="chart-card-head">
+        <h2>Serie de precios (referencia)</h2>
+        <label class="sym-picker">
+          Activo
+          <select
+            [value]="priceChartSymbol()"
+            (change)="priceChartSymbol.set($any($event.target).value)"
+          >
+            @for (s of status.symbols(); track s) {
+              <option [value]="s">{{ s }}</option>
+            }
+          </select>
+        </label>
+      </div>
       <div class="chart-host">
         <canvas baseChart [data]="priceLine().data" [options]="priceLine().options" [type]="priceLine().type"></canvas>
       </div>
